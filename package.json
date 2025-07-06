@@ -1,0 +1,57 @@
+{
+  "name": "sigrisk-ec-backend",
+  "version": "1.0.0",
+  "description": "Backend para Sistema SIGRISK-EC MAGERIT",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "dev:debug": "nodemon --inspect server.js",
+    "test": "cross-env NODE_ENV=test jest",
+    "test:watch": "cross-env NODE_ENV=test jest --watch",
+    "test:coverage": "cross-env NODE_ENV=test jest --coverage",
+    "test:integration": "cross-env NODE_ENV=test jest --testPathPattern=integration",
+    "test:unit": "cross-env NODE_ENV=test jest --testPathPattern=unit",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix",
+    "seed": "node src/utils/seedDatabase.js",
+    "migration": "node src/utils/migration.js",
+    "docs": "node src/utils/generateDocs.js"
+  },
+  "keywords": [
+    "magerit",
+    "ciberseguridad",
+    "riesgos",
+    "ecuador"
+  ],
+  "author": "USFQ - Ingeniería Ciberseguridad",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.10.0",
+    "bcryptjs": "^3.0.2",
+    "compression": "^1.8.0",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "dotenv": "^17.0.1",
+    "exceljs": "^4.4.0",
+    "express": "^4.21.1",
+    "express-rate-limit": "^7.5.1",
+    "express-validator": "^7.2.1",
+    "helmet": "^8.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.16.1",
+    "morgan": "^1.10.0",
+    "multer": "^2.0.1",
+    "node-cron": "^4.2.0",
+    "nodemailer": "^7.0.4",
+    "pdf-lib": "^1.17.1",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "cross-env": "^7.0.3",
+    "jest": "^30.0.4",
+    "mongodb-memory-server": "^10.1.4",
+    "nodemon": "^3.1.10",
+    "supertest": "^7.1.1"
+  }
+}
