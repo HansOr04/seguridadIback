@@ -39,7 +39,7 @@ const createAsset = async (req, res) => {
 
     // Verificar si el código ya existe en la organización
     const existingAsset = await Asset.findOne({
-      organization: req.user.organization,
+      organization: req.user.organization._id,
       code: code.toUpperCase()
     });
 
@@ -63,7 +63,7 @@ const createAsset = async (req, res) => {
     // Validar que el propietario existe y pertenece a la organización
     const ownerUser = await User.findOne({
       _id: owner.userId,
-      organization: req.user.organization,
+      organization: req.user.organization._id,
       isActive: true
     });
 
@@ -99,14 +99,14 @@ const createAsset = async (req, res) => {
       },
       location: location || {},
       metadata: metadata || {},
-      organization: req.user.organization
+      organization: req.user.organization._id
     });
 
     // Si hay custodio, validarlo
     if (custodian?.userId) {
       const custodianUser = await User.findOne({
         _id: custodian.userId,
-        organization: req.user.organization,
+        organization: req.user.organization._id,
         isActive: true
       });
 
@@ -168,7 +168,7 @@ const getAssets = async (req, res) => {
     } = req.query;
 
     // Construir filtros
-    const filters = { organization: req.user.organization };
+    const filters = { organization: req.user.organization._id };
 
     if (search) {
       filters.$or = [
@@ -207,7 +207,7 @@ const getAssets = async (req, res) => {
 
     // Calcular estadísticas
     const stats = await Asset.aggregate([
-      { $match: { organization: req.user.organization } },
+      { $match: { organization: req.user.organization._id } },
       {
         $group: {
           _id: null,
@@ -282,7 +282,7 @@ const getAssetById = async (req, res) => {
   try {
     const asset = await Asset.findOne({
       _id: req.params.id,
-      organization: req.user.organization
+      organization: req.user.organization._id
     })
       .populate('owner.userId', 'profile email')
       .populate('custodian.userId', 'profile email')
@@ -305,7 +305,7 @@ const getAssetById = async (req, res) => {
 
     // Obtener activos que dependen de este
     const dependentAssets = await Asset.find({
-      organization: req.user.organization,
+      organization: req.user.organization._id,
       'dependencies.assetId': asset._id
     }).select('name code type criticality').lean();
 
@@ -349,7 +349,7 @@ const updateAsset = async (req, res) => {
 
     const asset = await Asset.findOne({
       _id: req.params.id,
-      organization: req.user.organization
+      organization: req.user.organization._id
     });
 
     if (!asset) {
@@ -393,7 +393,7 @@ const updateAsset = async (req, res) => {
     if (owner?.userId && owner.userId !== asset.owner.userId.toString()) {
       const ownerUser = await User.findOne({
         _id: owner.userId,
-        organization: req.user.organization,
+        organization: req.user.organization._id,
         isActive: true
       });
 
@@ -417,7 +417,7 @@ const updateAsset = async (req, res) => {
     if (custodian?.userId) {
       const custodianUser = await User.findOne({
         _id: custodian.userId,
-        organization: req.user.organization,
+        organization: req.user.organization._id,
         isActive: true
       });
 
@@ -499,7 +499,7 @@ const deleteAsset = async (req, res) => {
   try {
     const asset = await Asset.findOne({
       _id: req.params.id,
-      organization: req.user.organization
+      organization: req.user.organization._id
     });
 
     if (!asset) {
@@ -512,7 +512,7 @@ const deleteAsset = async (req, res) => {
 
     // Verificar si otros activos dependen de este
     const dependentAssets = await Asset.countDocuments({
-      organization: req.user.organization,
+      organization: req.user.organization._id,
       'dependencies.assetId': asset._id
     });
 
@@ -572,7 +572,7 @@ const valuateAsset = async (req, res) => {
 
     const asset = await Asset.findOne({
       _id: req.params.id,
-      organization: req.user.organization
+      organization: req.user.organization._id
     });
 
     if (!asset) {
@@ -601,7 +601,7 @@ const valuateAsset = async (req, res) => {
 
     // Calcular valor sectorial si no está definido
     if (!asset.sectoralFactor || asset.sectoralFactor === 1.0) {
-      const organization = await Organization.findById(req.user.organization);
+      const organization = await Organization.findById(req.user.organization._id);
       if (organization?.mageritConfig?.defaultSectoralFactor) {
         asset.sectoralFactor = organization.mageritConfig.defaultSectoralFactor;
       }
@@ -646,88 +646,107 @@ const valuateAsset = async (req, res) => {
 };
 
 /**
- * @desc    Calcular dependencias entre activos
- * @route   POST /api/assets/:id/dependencies
- * @access  Private (admin, analyst)
+ * @desc    Obtener activos por organización
+ * @route   GET /api/assets/by-organization
+ * @access  Private (admin, analyst, viewer)
  */
-const calculateDependencies = async (req, res) => {
+const getAssetsByOrganization = async (req, res) => {
   try {
-    const asset = await Asset.findOne({
-      _id: req.params.id,
-      organization: req.user.organization
-    });
+    const organizationId = req.user.organization._id;
 
-    if (!asset) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Activo no encontrado',
-        timestamp: new Date().toISOString()
+    // Resumen ejecutivo de activos
+    const summary = await Asset.aggregate([
+      { $match: { organization: organizationId } },
+      {
+        $group: {
+          _id: null,
+          totalAssets: { $sum: 1 },
+          totalEconomicValue: { $sum: '$economicValue' },
+          avgCriticalityScore: { $avg: '$criticality.score' },
+          assetsByType: {
+            $push: {
+              type: '$type',
+              criticality: '$criticality.level',
+              economicValue: '$economicValue',
+              status: '$status'
+            }
+          }
+        }
+      }
+    ]);
+
+    const typeDistribution = {};
+    const criticalityDistribution = {
+      CRITICAL: 0,
+      HIGH: 0,
+      MEDIUM: 0,
+      LOW: 0,
+      VERY_LOW: 0
+    };
+    const statusDistribution = {};
+
+    if (summary.length > 0) {
+      summary[0].assetsByType.forEach(asset => {
+        // Distribución por tipo
+        typeDistribution[asset.type] = (typeDistribution[asset.type] || 0) + 1;
+        
+        // Distribución por criticidad
+        criticalityDistribution[asset.criticality]++;
+        
+        // Distribución por estado
+        statusDistribution[asset.status] = (statusDistribution[asset.status] || 0) + 1;
       });
     }
 
-    const { dependencies } = req.body;
+    // Top 10 activos más críticos
+    const topCriticalAssets = await Asset.find({
+      organization: organizationId,
+      status: 'ACTIVE'
+    })
+      .populate('owner.userId', 'profile email')
+      .select('name code type criticality valuation economicValue')
+      .sort({ 'criticality.score': -1 })
+      .limit(10)
+      .lean();
 
-    // Validar que los activos de dependencia existen
-    const dependencyAssetIds = dependencies.map(dep => dep.assetId);
-    const existingAssets = await Asset.find({
-      _id: { $in: dependencyAssetIds },
-      organization: req.user.organization
-    }).select('_id name code');
-
-    const existingAssetIds = existingAssets.map(a => a._id.toString());
-    const invalidDependencies = dependencyAssetIds.filter(id => 
-      !existingAssetIds.includes(id)
-    );
-
-    if (invalidDependencies.length > 0) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Algunos activos de dependencia no existen',
-        invalidAssetIds: invalidDependencies,
-        timestamp: new Date().toISOString()
-      });
-    }
-
-    // Limpiar dependencias existentes
-    asset.dependencies = [];
-
-    // Agregar nuevas dependencias
-    dependencies.forEach(dep => {
-      asset.addDependency(
-        dep.assetId,
-        dep.dependencyType,
-        dep.description,
-        dep.impactFactor
-      );
-    });
-
-    await asset.save();
-
-    // Obtener información completa de dependencias
-    await asset.populate({
-      path: 'dependencies.assetId',
-      select: 'name code type criticality valuation'
-    });
-
-    // Calcular análisis de dependencias
-    const dependencyAnalysis = await assetService.analyzeDependencies(asset);
+    // Activos con dependencias complejas
+    const complexDependencies = await Asset.find({
+      organization: organizationId,
+      $expr: { $gte: [{ $size: '$dependencies' }, 3] }
+    })
+      .select('name code dependencies criticality')
+      .populate('dependencies.assetId', 'name code')
+      .lean();
 
     res.json({
       status: 'success',
-      message: 'Dependencias calculadas exitosamente',
       data: {
-        asset,
-        dependencyAnalysis,
-        totalImpact: asset.calculateDependencyImpact()
+        summary: summary.length > 0 ? {
+          totalAssets: summary[0].totalAssets,
+          totalEconomicValue: summary[0].totalEconomicValue,
+          avgCriticalityScore: Math.round(summary[0].avgCriticalityScore * 100) / 100
+        } : {
+          totalAssets: 0,
+          totalEconomicValue: 0,
+          avgCriticalityScore: 0
+        },
+        distributions: {
+          byType: typeDistribution,
+          byCriticality: criticalityDistribution,
+          byStatus: statusDistribution
+        },
+        topCriticalAssets,
+        complexDependencies: complexDependencies.length,
+        assetTypes: Asset.getAssetTypes()
       },
       timestamp: new Date().toISOString()
     });
 
   } catch (error) {
-    console.error('Error calculating dependencies:', error);
+    console.error('Error fetching assets by organization:', error);
     res.status(500).json({
       status: 'error',
-      message: 'Error interno del servidor al calcular dependencias',
+      message: 'Error interno del servidor al obtener activos de la organización',
       timestamp: new Date().toISOString()
     });
   }
@@ -744,7 +763,7 @@ const getAssetsByType = async (req, res) => {
     const { subtype, status = 'ACTIVE' } = req.query;
 
     const filters = {
-      organization: req.user.organization,
+      organization: req.user.organization._id,
       type
     };
 
@@ -814,111 +833,6 @@ const getAssetsByType = async (req, res) => {
 };
 
 /**
- * @desc    Obtener activos por organización
- * @route   GET /api/assets/by-organization
- * @access  Private (admin, analyst, viewer)
- */
-const getAssetsByOrganization = async (req, res) => {
-  try {
-    // Resumen ejecutivo de activos
-    const summary = await Asset.aggregate([
-      { $match: { organization: req.user.organization } },
-      {
-        $group: {
-          _id: null,
-          totalAssets: { $sum: 1 },
-          totalEconomicValue: { $sum: '$economicValue' },
-          avgCriticalityScore: { $avg: '$criticality.score' },
-          assetsByType: {
-            $push: {
-              type: '$type',
-              criticality: '$criticality.level',
-              economicValue: '$economicValue',
-              status: '$status'
-            }
-          }
-        }
-      }
-    ]);
-
-    const typeDistribution = {};
-    const criticalityDistribution = {
-      CRITICAL: 0,
-      HIGH: 0,
-      MEDIUM: 0,
-      LOW: 0,
-      VERY_LOW: 0
-    };
-    const statusDistribution = {};
-
-    if (summary.length > 0) {
-      summary[0].assetsByType.forEach(asset => {
-        // Distribución por tipo
-        typeDistribution[asset.type] = (typeDistribution[asset.type] || 0) + 1;
-        
-        // Distribución por criticidad
-        criticalityDistribution[asset.criticality]++;
-        
-        // Distribución por estado
-        statusDistribution[asset.status] = (statusDistribution[asset.status] || 0) + 1;
-      });
-    }
-
-    // Top 10 activos más críticos
-    const topCriticalAssets = await Asset.find({
-      organization: req.user.organization,
-      status: 'ACTIVE'
-    })
-      .populate('owner.userId', 'profile email')
-      .select('name code type criticality valuation economicValue')
-      .sort({ 'criticality.score': -1 })
-      .limit(10)
-      .lean();
-
-    // Activos con dependencias complejas
-    const complexDependencies = await Asset.find({
-      organization: req.user.organization,
-      $expr: { $gte: [{ $size: '$dependencies' }, 3] }
-    })
-      .select('name code dependencies criticality')
-      .populate('dependencies.assetId', 'name code')
-      .lean();
-
-    res.json({
-      status: 'success',
-      data: {
-        summary: summary.length > 0 ? {
-          totalAssets: summary[0].totalAssets,
-          totalEconomicValue: summary[0].totalEconomicValue,
-          avgCriticalityScore: Math.round(summary[0].avgCriticalityScore * 100) / 100
-        } : {
-          totalAssets: 0,
-          totalEconomicValue: 0,
-          avgCriticalityScore: 0
-        },
-        distributions: {
-          byType: typeDistribution,
-          byCriticality: criticalityDistribution,
-          byStatus: statusDistribution
-        },
-        topCriticalAssets,
-        complexDependencies: complexDependencies.length,
-        assetTypes: Asset.getAssetTypes()
-      },
-      timestamp: new Date().toISOString()
-    });
-
-  } catch (error) {
-    console.error('Error fetching assets by organization:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Error interno del servidor al obtener activos de la organización',
-      timestamp: new Date().toISOString()
-    });
-  }
-};
-
-/**
  * @desc    Duplicar configuración de activo
  * @route   POST /api/assets/:id/duplicate
  * @access  Private (admin, analyst)
@@ -927,7 +841,7 @@ const duplicateAsset = async (req, res) => {
   try {
     const sourceAsset = await Asset.findOne({
       _id: req.params.id,
-      organization: req.user.organization
+      organization: req.user.organization._id
     });
 
     if (!sourceAsset) {
@@ -950,7 +864,7 @@ const duplicateAsset = async (req, res) => {
 
     // Verificar que el código no exista
     const existingAsset = await Asset.findOne({
-      organization: req.user.organization,
+      organization: req.user.organization._id,
       code: code.toUpperCase()
     });
 
@@ -976,7 +890,7 @@ const duplicateAsset = async (req, res) => {
       custodian: sourceAsset.custodian,
       location: { ...sourceAsset.location },
       metadata: { ...sourceAsset.metadata },
-      organization: req.user.organization,
+      organization: req.user.organization._id,
       status: 'PLANNED'
     });
 
@@ -1015,7 +929,7 @@ const exportAssets = async (req, res) => {
   try {
     const { format = 'json', type, status } = req.query;
 
-    const filters = { organization: req.user.organization };
+    const filters = { organization: req.user.organization._id };
     if (type) filters.type = type;
     if (status && status !== 'ALL') filters.status = status;
 
@@ -1075,9 +989,8 @@ module.exports = {
   updateAsset,
   deleteAsset,
   valuateAsset,
-  calculateDependencies,
-  getAssetsByType,
   getAssetsByOrganization,
+  getAssetsByType,
   duplicateAsset,
   exportAssets
 };

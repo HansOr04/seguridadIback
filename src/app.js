@@ -82,12 +82,14 @@ try {
 } catch (error) {
   console.error('❌ Error cargando rutas de users:', error.message);
 }
+
+// CORREGIDO: Cambiar de /api/asset a /api/assets
 try {
   const assetRoutes = require('./routes/assets');
-  app.use('/api/asset', assetRoutes);
-  console.log('✅ Rutas de assers cargadas');
+  app.use('/api/assets', assetRoutes);
+  console.log('✅ Rutas de assets cargadas');
 } catch (error) {
-  console.error('❌ Error cargando rutas de users:', error.message);
+  console.error('❌ Error cargando rutas de assets:', error.message);
 }
 
 // Ruta de salud del sistema

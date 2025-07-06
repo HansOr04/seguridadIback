@@ -68,6 +68,87 @@ const updateAssetValidation = [
     .withMessage('La descripción no puede exceder 1000 caracteres')
 ];
 
+// ===== RUTAS ESPECÍFICAS PRIMERO (antes de rutas con parámetros) =====
+
+/**
+ * @route   GET /api/assets/by-organization
+ * @desc    Obtener resumen de activos por organización
+ * @access  Private (Admin, analyst, viewer)
+ */
+router.get('/by-organization', 
+  auth, 
+  assetPermissions.canRead,
+  assetsController.getAssetsByOrganization
+);
+
+/**
+ * @route   GET /api/assets/export
+ * @desc    Exportar listado de activos
+ * @access  Private (Admin y analyst)
+ */
+router.get('/export', 
+  auth, 
+  assetPermissions.canImportExport,
+  [
+    query('format')
+      .optional()
+      .isIn(['json', 'csv', 'excel'])
+      .withMessage('Formato de exportación no válido'),
+    query('type')
+      .optional()
+      .isIn(['I', 'S', 'SW', 'HW', 'COM', 'SI', 'AUX', 'L', 'P'])
+      .withMessage('Tipo de filtro no válido')
+  ],
+  validateRequest,
+  assetsController.exportAssets
+);
+
+/**
+ * @route   GET /api/assets/magerit/taxonomy
+ * @desc    Obtener taxonomía MAGERIT
+ * @access  Private (Todos pueden consultar)
+ */
+router.get('/magerit/taxonomy', 
+  auth, 
+  assetPermissions.canRead,
+  async (req, res) => {
+    try {
+      const taxonomy = {
+        types: {
+          'I': 'Información',
+          'S': 'Servicios',
+          'SW': 'Software',
+          'HW': 'Hardware',
+          'COM': 'Comunicaciones',
+          'SI': 'Soportes de Información',
+          'AUX': 'Equipamiento Auxiliar',
+          'L': 'Instalaciones',
+          'P': 'Personal'
+        },
+        dimensions: ['confidentiality', 'integrity', 'availability', 'authenticity', 'traceability'],
+        levels: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+      };
+      
+      res.json({
+        status: 'success',
+        data: {
+          taxonomy,
+          version: '3.0',
+          description: 'Taxonomía MAGERIT v3.0 para clasificación de activos'
+        },
+        timestamp: new Date().toISOString()
+      });
+    } catch (error) {
+      console.error('Error obteniendo taxonomía:', error);
+      res.status(500).json({
+        status: 'error',
+        message: 'Error obteniendo taxonomía MAGERIT',
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
 // ===== RUTAS BÁSICAS =====
 
 /**
@@ -92,6 +173,25 @@ router.post('/',
   createAssetValidation,
   validateRequest,
   assetsController.createAsset
+);
+
+// ===== RUTAS CON PARÁMETROS (al final) =====
+
+/**
+ * @route   GET /api/assets/by-type/:type
+ * @desc    Obtener activos por tipo
+ * @access  Private (Admin, analyst, viewer)
+ */
+router.get('/by-type/:type', 
+  auth, 
+  assetPermissions.canRead,
+  [
+    param('type')
+      .isIn(['I', 'S', 'SW', 'HW', 'COM', 'SI', 'AUX', 'L', 'P'])
+      .withMessage('Tipo de activo no válido')
+  ],
+  validateRequest,
+  assetsController.getAssetsByType
 );
 
 /**
@@ -174,34 +274,6 @@ router.post('/:id/valuate',
 );
 
 /**
- * @route   GET /api/assets/by-organization
- * @desc    Obtener resumen de activos por organización
- * @access  Private (Admin, analyst, viewer)
- */
-router.get('/by-organization', 
-  auth, 
-  assetPermissions.canRead,
-  assetsController.getAssetsByOrganization
-);
-
-/**
- * @route   GET /api/assets/by-type/:type
- * @desc    Obtener activos por tipo
- * @access  Private (Admin, analyst, viewer)
- */
-router.get('/by-type/:type', 
-  auth, 
-  assetPermissions.canRead,
-  [
-    param('type')
-      .isIn(['I', 'S', 'SW', 'HW', 'COM', 'SI', 'AUX', 'L', 'P'])
-      .withMessage('Tipo de activo no válido')
-  ],
-  validateRequest,
-  assetsController.getAssetsByType
-);
-
-/**
  * @route   POST /api/assets/:id/duplicate
  * @desc    Duplicar configuración de activo
  * @access  Private (Admin y analyst)
@@ -224,74 +296,6 @@ router.post('/:id/duplicate',
   ],
   validateRequest,
   assetsController.duplicateAsset
-);
-
-/**
- * @route   GET /api/assets/export
- * @desc    Exportar listado de activos
- * @access  Private (Admin y analyst)
- */
-router.get('/export', 
-  auth, 
-  assetPermissions.canImportExport,
-  [
-    query('format')
-      .optional()
-      .isIn(['json', 'csv', 'excel'])
-      .withMessage('Formato de exportación no válido'),
-    query('type')
-      .optional()
-      .isIn(['I', 'S', 'SW', 'HW', 'COM', 'SI', 'AUX', 'L', 'P'])
-      .withMessage('Tipo de filtro no válido')
-  ],
-  validateRequest,
-  assetsController.exportAssets
-);
-
-/**
- * @route   GET /api/assets/magerit/taxonomy
- * @desc    Obtener taxonomía MAGERIT
- * @access  Private (Todos pueden consultar)
- */
-router.get('/magerit/taxonomy', 
-  auth, 
-  assetPermissions.canRead,
-  async (req, res) => {
-    try {
-      const taxonomy = {
-        types: {
-          'I': 'Información',
-          'S': 'Servicios',
-          'SW': 'Software',
-          'HW': 'Hardware',
-          'COM': 'Comunicaciones',
-          'SI': 'Soportes de Información',
-          'AUX': 'Equipamiento Auxiliar',
-          'L': 'Instalaciones',
-          'P': 'Personal'
-        },
-        dimensions: ['confidentiality', 'integrity', 'availability', 'authenticity', 'traceability'],
-        levels: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-      };
-      
-      res.json({
-        status: 'success',
-        data: {
-          taxonomy,
-          version: '3.0',
-          description: 'Taxonomía MAGERIT v3.0 para clasificación de activos'
-        },
-        timestamp: new Date().toISOString()
-      });
-    } catch (error) {
-      console.error('Error obteniendo taxonomía:', error);
-      res.status(500).json({
-        status: 'error',
-        message: 'Error obteniendo taxonomía MAGERIT',
-        timestamp: new Date().toISOString()
-      });
-    }
-  }
 );
 
 module.exports = router;
