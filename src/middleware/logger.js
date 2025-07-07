@@ -1,336 +1,368 @@
-    const fs = require('fs');
+// src/middleware/logger.js - VERSIÓN STANDALONE CORREGIDA
+
+const winston = require('winston');
+const chalk = require('chalk');
+const fs = require('fs');
 const path = require('path');
-const util = require('util');
+
+// Configuración directa sin archivo externo
+const logDir = path.join(process.cwd(), 'logs');
 
 // Crear directorio de logs si no existe
-const logsDir = path.join(__dirname, '../logs');
-if (!fs.existsSync(logsDir)) {
-  fs.mkdirSync(logsDir, { recursive: true });
+if (!fs.existsSync(logDir)) {
+  fs.mkdirSync(logDir, { recursive: true });
 }
 
-// Configuración de colores para consola
-const colors = {
-  reset: '\x1b[0m',
-  bright: '\x1b[1m',
-  dim: '\x1b[2m',
-  red: '\x1b[31m',
-  green: '\x1b[32m',
-  yellow: '\x1b[33m',
-  blue: '\x1b[34m',
-  magenta: '\x1b[35m',
-  cyan: '\x1b[36m',
-  white: '\x1b[37m'
-};
+// Configuración de Winston
+const logger = winston.createLogger({
+  level: process.env.LOG_LEVEL || 'info',
+  format: winston.format.combine(
+    winston.format.timestamp({
+      format: 'YYYY-MM-DD HH:mm:ss.SSS'
+    }),
+    winston.format.errors({ stack: true }),
+    winston.format.json()
+  ),
+  defaultMeta: { service: 'sigrisk-backend' },
+  transports: [
+    // Archivo para errores
+    new winston.transports.File({ 
+      filename: path.join(logDir, 'error.log'), 
+      level: 'error',
+      maxsize: 50 * 1024 * 1024, // 50MB
+      maxFiles: 5
+    }),
+    // Archivo para todos los logs
+    new winston.transports.File({ 
+      filename: path.join(logDir, 'combined.log'),
+      maxsize: 50 * 1024 * 1024, // 50MB
+      maxFiles: 10
+    })
+  ],
+});
 
-// Utilidad para obtener IP del cliente
-const getClientIP = (req) => {
-  return req.ip || 
-         req.connection.remoteAddress || 
-         req.socket.remoteAddress ||
-         (req.connection.socket ? req.connection.socket.remoteAddress : null) ||
-         req.headers['x-forwarded-for']?.split(',')[0] ||
-         req.headers['x-real-ip'] ||
-         'IP no disponible';
-};
+// Solo agregar transporte de consola en desarrollo
+if (process.env.NODE_ENV !== 'production') {
+  logger.add(new winston.transports.Console({
+    level: 'debug',
+    format: winston.format.combine(
+      winston.format.colorize(),
+      winston.format.timestamp({
+        format: 'HH:mm:ss.SSS'
+      }),
+      winston.format.printf(({ timestamp, level, message, ...meta }) => {
+        const metaStr = Object.keys(meta).length ? JSON.stringify(meta, null, 2) : '';
+        return `${timestamp} [${level.toUpperCase()}] ${message} ${metaStr}`;
+      })
+    )
+  }));
+}
 
-// Utilidad para formatear fecha
-const formatDate = (date = new Date()) => {
-  return date.toISOString().replace('T', ' ').replace('Z', '');
-};
+// Campos sensibles a filtrar
+const SENSITIVE_FIELDS = [
+  'password',
+  'token',
+  'authorization',
+  'cookie',
+  'x-api-key',
+  'access_token',
+  'refresh_token'
+];
 
-// Utilidad para obtener nivel de log según status code
-const getLogLevel = (statusCode) => {
-  if (statusCode >= 500) return 'ERROR';
-  if (statusCode >= 400) return 'WARN';
-  if (statusCode >= 300) return 'INFO';
-  return 'SUCCESS';
-};
+// URLs a excluir del logging
+const EXCLUDE_URLS = [
+  '/health',
+  '/favicon.ico',
+  '/robots.txt'
+];
 
-// Utilidad para obtener color según nivel
-const getColorByLevel = (level) => {
-  const colorMap = {
-    'ERROR': colors.red,
-    'WARN': colors.yellow,
-    'INFO': colors.blue,
-    'SUCCESS': colors.green,
-    'DEBUG': colors.cyan
-  };
-  return colorMap[level] || colors.white;
-};
-
-// Función para escribir en archivo
-const writeToFile = (filename, content) => {
-  const filePath = path.join(logsDir, filename);
-  const logEntry = `${content}\n`;
+// Función para filtrar información sensible
+const sanitizeData = (data) => {
+  if (!data || typeof data !== 'object') return data;
   
-  fs.appendFile(filePath, logEntry, (err) => {
-    if (err) {
-      console.error('Error escribiendo log:', err);
+  const sanitized = Array.isArray(data) ? [...data] : { ...data };
+  
+  const sanitizeObject = (obj) => {
+    if (!obj || typeof obj !== 'object') return obj;
+    
+    for (const key in obj) {
+      if (obj.hasOwnProperty(key)) {
+        const lowerKey = key.toLowerCase();
+        if (SENSITIVE_FIELDS.some(field => lowerKey.includes(field))) {
+          obj[key] = '[FILTERED]';
+        } else if (typeof obj[key] === 'object' && obj[key] !== null) {
+          obj[key] = sanitizeObject(obj[key]);
+        }
+      }
     }
-  });
-};
-
-// Función para formatear logs
-const formatLogEntry = (req, res, responseTime, level = 'INFO') => {
-  const timestamp = formatDate();
-  const method = req.method;
-  const url = req.originalUrl || req.url;
-  const status = res.statusCode;
-  const ip = getClientIP(req);
-  const userAgent = req.get('User-Agent') || 'N/A';
-  const contentLength = res.get('Content-Length') || '-';
-  const userId = req.user?.id || 'Anónimo';
-  const organization = req.user?.organization || 'N/A';
-  
-  // Formato JSON para logs estructurados
-  const logData = {
-    timestamp,
-    level,
-    method,
-    url,
-    status,
-    responseTime: `${responseTime}ms`,
-    ip,
-    userId,
-    organization,
-    contentLength,
-    userAgent,
-    environment: process.env.NODE_ENV || 'development'
+    return obj;
   };
-
-  // Formato legible para consola
-  const consoleFormat = `${timestamp} [${level}] ${method} ${url} ${status} ${responseTime}ms - ${ip} - User: ${userId}`;
   
-  // Formato detallado para archivo
-  const fileFormat = JSON.stringify(logData, null, 2);
-  
-  return { consoleFormat, fileFormat, logData };
+  return sanitizeObject(sanitized);
 };
 
-// Middleware principal de logging
-const logger = (req, res, next) => {
+// Función para verificar si una URL debe ser excluida
+const shouldExcludeUrl = (url) => {
+  return EXCLUDE_URLS.some(excludeUrl => url.includes(excludeUrl));
+};
+
+// Middleware principal de logging HTTP
+const httpLogger = (req, res, next) => {
   const startTime = Date.now();
   
-  // Interceptar el final de la respuesta
-  const originalEnd = res.end;
-  const originalWrite = res.write;
-  
-  let body = '';
-  
-  // Capturar body de respuesta para logs detallados
-  res.write = function(chunk, encoding) {
-    if (chunk) {
-      body += chunk.toString();
-    }
-    return originalWrite.call(res, chunk, encoding);
+  // Información básica de la request
+  const requestInfo = {
+    method: req.method,
+    url: req.originalUrl || req.url,
+    ip: req.ip || req.connection?.remoteAddress || req.socket?.remoteAddress || 'unknown',
+    userAgent: req.get('User-Agent') || 'unknown',
+    userId: req.user?.id || req.user?._id || 'anonymous',
+    organization: req.user?.organization?._id || req.user?.organization || 'unknown',
+    timestamp: new Date().toISOString(),
+    requestId: req.headers['x-request-id'] || `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
   };
-  
-  res.end = function(chunk, encoding) {
-    if (chunk) {
-      body += chunk.toString();
-    }
-    const url = req.originalUrl || req.url;
 
-    const responseTime = Date.now() - startTime;
-    const level = getLogLevel(res.statusCode);
-    const { consoleFormat, fileFormat, logData } = formatLogEntry(req, res, responseTime, level);
-    
-    // Log en consola con colores
-    const color = getColorByLevel(level);
-    console.log(`${color}${consoleFormat}${colors.reset}`);
-    
-    // Escribir en archivos según el nivel
-    const today = new Date().toISOString().split('T')[0];
-    
-    // Log general
-    writeToFile(`access-${today}.log`, fileFormat);
-    
-    // Logs específicos por nivel
-    if (level === 'ERROR') {
-      writeToFile(`error-${today}.log`, fileFormat);
-    } else if (level === 'WARN') {
-      writeToFile(`warning-${today}.log`, fileFormat);
+  // Verificar si la request debe ser excluida
+  if (shouldExcludeUrl(requestInfo.url)) {
+    return next();
+  }
+
+  // Capturar el body de la request (solo en desarrollo y si no es muy grande)
+  if (process.env.NODE_ENV === 'development' && req.body) {
+    const bodyStr = JSON.stringify(req.body);
+    if (bodyStr.length < 10240) { // 10KB
+      requestInfo.body = sanitizeData(req.body);
     }
-    
-    // Log detallado en desarrollo
-    if (process.env.NODE_ENV === 'development') {
-      const detailedLog = {
-        ...logData,
-        headers: req.headers,
-        query: req.query,
-        params: req.params,
-        body: req.body ? JSON.stringify(req.body).substring(0, 1000) + '...' : 'N/A',
-        responseBody: body.substring(0, 500) + '...'
-      };
-      writeToFile(`detailed-${today}.log`, JSON.stringify(detailedLog, null, 2));
-    }
-    
-    // Métricas especiales para SIGRISK-EC
-    if (url.includes('/api/risks') || url.includes('/api/assets')) {
-      const securityLog = {
-        ...logData,
-        module: 'SECURITY',
-        action: method === 'GET' ? 'CONSULTA' : method === 'POST' ? 'CREACION' : method === 'PUT' ? 'ACTUALIZACION' : 'ELIMINACION',
-        resource: url.includes('/risks') ? 'RIESGO' : 'ACTIVO'
-      };
-      writeToFile(`security-${today}.log`, JSON.stringify(securityLog, null, 2));
-    }
-    
-    return originalEnd.call(res, chunk, encoding);
+  }
+
+  // Guardar métodos originales de response
+  const originalSend = res.send;
+  const originalJson = res.json;
+  const originalEnd = res.end;
+
+  // Variable para capturar respuesta
+  let responseData = null;
+
+  // Override del método send
+  res.send = function(data) {
+    responseData = data;
+    return originalSend.call(this, data);
   };
-  
+
+  // Override del método json
+  res.json = function(data) {
+    responseData = data;
+    return originalJson.call(this, data);
+  };
+
+  // Override del método end - AQUÍ ESTABA EL ERROR ORIGINAL
+  res.end = function(chunk, encoding) {
+    try {
+      const duration = Date.now() - startTime;
+      const statusCode = res.statusCode;
+      const method = requestInfo.method; // FIX: Usar requestInfo.method en lugar de variable method indefinida
+      
+      // Determinar el nivel de log basado en el status code
+      let logLevel = 'info';
+      let logMessage = '';
+      let consoleColor = chalk.green;
+
+      if (statusCode >= 400 && statusCode < 500) {
+        logLevel = 'warn';
+        consoleColor = chalk.yellow;
+        logMessage = `${method} ${requestInfo.url} ${statusCode} ${duration}ms - ${requestInfo.ip} - User: ${requestInfo.userId}`;
+      } else if (statusCode >= 500) {
+        logLevel = 'error';
+        consoleColor = chalk.red;
+        logMessage = `${method} ${requestInfo.url} ${statusCode} ${duration}ms - ${requestInfo.ip} - User: ${requestInfo.userId}`;
+      } else if (statusCode >= 200 && statusCode < 300) {
+        logLevel = 'info';
+        consoleColor = chalk.green;
+        logMessage = `${method} ${requestInfo.url} ${statusCode} ${duration}ms - ${requestInfo.ip} - User: ${requestInfo.userId}`;
+      } else {
+        logLevel = 'info';
+        consoleColor = chalk.blue;
+        logMessage = `${method} ${requestInfo.url} ${statusCode} ${duration}ms - ${requestInfo.ip} - User: ${requestInfo.userId}`;
+      }
+
+      // Crear objeto de log completo
+      const logData = {
+        ...requestInfo,
+        response: {
+          statusCode,
+          duration,
+          size: res.get('content-length') || (chunk ? chunk.length : 0)
+        }
+      };
+
+      // Agregar datos de respuesta si está habilitado y no es muy grande
+      if (process.env.NODE_ENV === 'development' && 
+          responseData && 
+          JSON.stringify(responseData).length < 10240) { // 10KB
+        logData.response.body = sanitizeData(responseData);
+      }
+
+      // Log de consola con colores (solo en desarrollo)
+      if (process.env.NODE_ENV !== 'production') {
+        const timestamp = new Date().toLocaleTimeString();
+        console.log(consoleColor(`${timestamp} [${logLevel.toUpperCase()}] ${logMessage}`));
+      }
+
+      // Log estructurado para archivos
+      logger.log(logLevel, logMessage, logData);
+
+      // Log adicional para errores críticos
+      if (statusCode >= 500) {
+        logger.error(`CRITICAL ERROR: ${method} ${requestInfo.url}`, {
+          ...logData,
+          critical: true,
+          needsAttention: true
+        });
+      }
+
+      // Verificar si el tiempo de respuesta es lento (más de 5 segundos)
+      if (duration > 5000) {
+        logger.warn(`SLOW RESPONSE: ${method} ${requestInfo.url} took ${duration}ms`, {
+          ...logData,
+          performance: {
+            slow: true,
+            threshold: 5000
+          }
+        });
+      }
+
+    } catch (error) {
+      // Error en el propio logger - usar console.error para evitar bucle infinito
+      console.error('💥 Error en middleware de logging:', {
+        error: error.message,
+        stack: error.stack,
+        url: requestInfo?.url,
+        method: requestInfo?.method
+      });
+    }
+
+    // Llamar al método original
+    return originalEnd.call(this, chunk, encoding);
+  };
+
   next();
 };
 
-// Funciones de logging manual
-const logInfo = (message, data = {}) => {
-  const timestamp = formatDate();
-  const logEntry = {
-    timestamp,
-    level: 'INFO',
-    message,
-    data,
-    environment: process.env.NODE_ENV || 'development'
+// Middleware para logging de errores no capturados
+const errorLogger = (err, req, res, next) => {
+  const errorInfo = {
+    message: err.message,
+    stack: err.stack,
+    method: req.method,
+    url: req.originalUrl || req.url,
+    ip: req.ip || req.connection?.remoteAddress || 'unknown',
+    userId: req.user?.id || req.user?._id || 'anonymous',
+    timestamp: new Date().toISOString(),
+    type: 'unhandled_error'
   };
-  
-  console.log(`${colors.blue}[INFO] ${timestamp} - ${message}${colors.reset}`);
-  const today = new Date().toISOString().split('T')[0];
-  writeToFile(`app-${today}.log`, JSON.stringify(logEntry, null, 2));
+
+  // Log del error
+  logger.error('Unhandled Application Error', errorInfo);
+
+  // Log en consola con color (solo en desarrollo)
+  if (process.env.NODE_ENV !== 'production') {
+    console.error(chalk.red(`💥 Error en aplicación\n${err.stack}`));
+  }
+
+  next(err);
 };
 
-const logError = (message, error = {}, data = {}) => {
-  const timestamp = formatDate();
-  const logEntry = {
-    timestamp,
-    level: 'ERROR',
-    message,
-    error: {
-      message: error.message || 'Error desconocido',
-      stack: error.stack || 'Stack no disponible',
-      code: error.code || 'N/A'
-    },
-    data,
-    environment: process.env.NODE_ENV || 'development'
-  };
+// Función para logging manual
+const log = {
+  info: (message, meta = {}) => {
+    logger.info(message, meta);
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(chalk.blue(`ℹ️  ${message}`));
+    }
+  },
   
-  console.error(`${colors.red}[ERROR] ${timestamp} - ${message}${colors.reset}`);
-  console.error(`${colors.red}${error.stack || error.message}${colors.reset}`);
+  warn: (message, meta = {}) => {
+    logger.warn(message, meta);
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(chalk.yellow(`⚠️  ${message}`));
+    }
+  },
   
-  const today = new Date().toISOString().split('T')[0];
-  writeToFile(`error-${today}.log`, JSON.stringify(logEntry, null, 2));
-  writeToFile(`app-${today}.log`, JSON.stringify(logEntry, null, 2));
-};
-
-const logWarning = (message, data = {}) => {
-  const timestamp = formatDate();
-  const logEntry = {
-    timestamp,
-    level: 'WARN',
-    message,
-    data,
-    environment: process.env.NODE_ENV || 'development'
-  };
+  error: (message, meta = {}) => {
+    logger.error(message, meta);
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(chalk.red(`❌ ${message}`));
+    }
+  },
   
-  console.warn(`${colors.yellow}[WARN] ${timestamp} - ${message}${colors.reset}`);
-  const today = new Date().toISOString().split('T')[0];
-  writeToFile(`warning-${today}.log`, JSON.stringify(logEntry, null, 2));
-  writeToFile(`app-${today}.log`, JSON.stringify(logEntry, null, 2));
-};
-
-const logDebug = (message, data = {}) => {
-  if (process.env.NODE_ENV === 'development') {
-    const timestamp = formatDate();
-    const logEntry = {
-      timestamp,
-      level: 'DEBUG',
-      message,
-      data,
-      environment: process.env.NODE_ENV || 'development'
+  debug: (message, meta = {}) => {
+    logger.debug(message, meta);
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(chalk.cyan(`🔍 ${message}`));
+    }
+  },
+  
+  success: (message, meta = {}) => {
+    logger.info(`SUCCESS: ${message}`, meta);
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(chalk.green(`✅ ${message}`));
+    }
+  },
+  
+  // Función especial para logs de seguridad
+  security: (message, meta = {}) => {
+    logger.info(`SECURITY: ${message}`, { ...meta, type: 'security' });
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(chalk.magenta(`🔒 SECURITY: ${message}`));
+    }
+  },
+  
+  // Función especial para logs de auditoría
+  audit: (action, userId, details = {}) => {
+    const auditData = {
+      userId,
+      action,
+      details: sanitizeData(details),
+      timestamp: new Date().toISOString(),
+      type: 'audit'
     };
     
-    console.log(`${colors.cyan}[DEBUG] ${timestamp} - ${message}${colors.reset}`);
-    const today = new Date().toISOString().split('T')[0];
-    writeToFile(`debug-${today}.log`, JSON.stringify(logEntry, null, 2));
+    logger.info(`AUDIT: ${action}`, auditData);
+    
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(chalk.blue(`📝 AUDIT: ${action} by ${userId}`));
+    }
   }
 };
 
-// Función para limpiar logs antiguos
-const cleanOldLogs = (daysToKeep = 30) => {
-  const cutoffDate = new Date();
-  cutoffDate.setDate(cutoffDate.getDate() - daysToKeep);
+// Manejadores de excepciones globales
+process.on('uncaughtException', (error) => {
+  console.error(chalk.red('💥 Excepción no capturada:'), error);
+  logger.error('Uncaught Exception', {
+    error: error.message,
+    stack: error.stack,
+    type: 'uncaught_exception'
+  });
   
-  fs.readdir(logsDir, (err, files) => {
-    if (err) {
-      console.error('Error leyendo directorio de logs:', err);
-      return;
-    }
-    
-    files.forEach(file => {
-      const filePath = path.join(logsDir, file);
-      fs.stat(filePath, (err, stats) => {
-        if (err) return;
-        
-        if (stats.mtime < cutoffDate) {
-          fs.unlink(filePath, (err) => {
-            if (err) {
-              console.error('Error eliminando log antiguo:', err);
-            } else {
-              console.log(`Log antiguo eliminado: ${file}`);
-            }
-          });
-        }
-      });
-    });
-  });
-};
+  // Dar tiempo para que se escriban los logs antes de salir
+  setTimeout(() => {
+    process.exit(1);
+  }, 1000);
+});
 
-// Función para obtener estadísticas de logs
-const getLogStats = () => {
-  return new Promise((resolve, reject) => {
-    fs.readdir(logsDir, (err, files) => {
-      if (err) {
-        reject(err);
-        return;
-      }
-      
-      const stats = {
-        totalFiles: files.length,
-        logTypes: {},
-        totalSize: 0
-      };
-      
-      let processed = 0;
-      
-      files.forEach(file => {
-        const filePath = path.join(logsDir, file);
-        fs.stat(filePath, (err, fileStat) => {
-          if (!err) {
-            stats.totalSize += fileStat.size;
-            const logType = file.split('-')[0];
-            stats.logTypes[logType] = (stats.logTypes[logType] || 0) + 1;
-          }
-          
-          processed++;
-          if (processed === files.length) {
-            stats.totalSizeMB = Math.round(stats.totalSize / (1024 * 1024) * 100) / 100;
-            resolve(stats);
-          }
-        });
-      });
-      
-      if (files.length === 0) {
-        resolve(stats);
-      }
-    });
+process.on('unhandledRejection', (reason, promise) => {
+  console.error(chalk.red('💥 Promise rechazada no manejada:'), reason);
+  logger.error('Unhandled Promise Rejection', {
+    reason: reason?.message || reason,
+    stack: reason?.stack,
+    promise: promise.toString(),
+    type: 'unhandled_rejection'
   });
-};
+});
 
 module.exports = {
-  logger,
-  logInfo,
-  logError,
-  logWarning,
-  logDebug,
-  cleanOldLogs,
-  getLogStats
+  httpLogger,
+  errorLogger,
+  log,
+  logger
 };
