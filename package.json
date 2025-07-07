@@ -2,9 +2,9 @@
   "name": "sigrisk-ec-backend",
   "version": "1.0.0",
   "description": "Sistema de Gestión Cuantitativa de Riesgos Cibernéticos basado en MAGERIT v3.0 - Backend",
-  "main": "src/server.js",
+  "main": "server.js",
   "scripts": {
-    "start": "node src/server.js",
+    "start": "node server.js",
     "dev": "cross-env NODE_ENV=development nodemon src/server.js",
     "dev:debug": "cross-env NODE_ENV=development DEBUG=sigrisk:* nodemon src/server.js",
     "test": "cross-env NODE_ENV=test jest --watch",
@@ -55,36 +55,39 @@
     "npm": ">=9.0.0"
   },
   "dependencies": {
-    "express": "^4.18.2",
-    "mongoose": "^8.0.3",
+    "axios": "^1.6.2",
+    "bcryptjs": "^2.4.3",
+    "compression": "^1.7.4",
+    "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
-    "bcryptjs": "^2.4.3",
-    "jsonwebtoken": "^9.0.2",
-    "helmet": "^7.1.0",
-    "morgan": "^1.10.0",
-    "express-rate-limit": "^7.1.5",
-    "compression": "^1.7.4",
-    "express-validator": "^7.0.1",
-    "cookie-parser": "^1.4.6",
-    "multer": "^1.4.5-lts.1",
-    "pdfkit": "^0.14.0",
     "exceljs": "^4.4.0",
+    "express": "^4.18.2",
+    "express-rate-limit": "^7.1.5",
+    "express-validator": "^7.0.1",
+    "helmet": "^7.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.0.3",
+    "morgan": "^1.10.0",
+    "multer": "^1.4.5-lts.1",
+    "node-cron": "^3.0.3",
     "nodemailer": "^6.9.7",
-    "axios": "^1.6.2",
-    "node-cron": "^3.0.3"
+    "pdfkit": "^0.14.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
-    "nodemon": "^3.0.2",
-    "jest": "^29.7.0",
-    "supertest": "^6.3.3",
     "cross-env": "^7.0.3",
     "eslint": "^8.55.0",
-    "eslint-config-node": "^4.1.0"
+    "eslint-config-node": "^4.1.0",
+    "jest": "^29.7.0",
+    "nodemon": "^3.0.2",
+    "supertest": "^6.3.3"
   },
   "jest": {
     "testEnvironment": "node",
-    "setupFilesAfterEnv": ["<rootDir>/tests/setup.js"],
+    "setupFilesAfterEnv": [
+      "<rootDir>/tests/setup.js"
+    ],
     "testMatch": [
       "<rootDir>/tests/**/*.test.js"
     ],
@@ -115,7 +118,12 @@
     },
     "rules": {
       "no-console": "off",
-      "no-unused-vars": ["error", { "argsIgnorePattern": "^_" }],
+      "no-unused-vars": [
+        "error",
+        {
+          "argsIgnorePattern": "^_"
+        }
+      ],
       "prefer-const": "error",
       "no-var": "error"
     }

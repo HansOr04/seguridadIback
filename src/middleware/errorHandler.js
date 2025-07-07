@@ -1,210 +1,222 @@
-const { body, param, query, validationResult } = require('express-validator');
+const { logError } = require('./logger');
 
-// Middleware para manejar errores de validación
-const handleValidationErrors = (req, res, next) => {
-  const errors = validationResult(req);
-  
-  if (!errors.isEmpty()) {
-    const errorMessages = errors.array().map(error => ({
-      field: error.path,
-      message: error.msg,
-      value: error.value
+// Middleware de manejo de errores para SIGRISK-EC
+const errorHandler = (err, req, res, next) => {
+  // Log del error con contexto completo
+  logError('Error en aplicación', err, {
+    url: req.originalUrl,
+    method: req.method,
+    ip: req.ip,
+    userAgent: req.get('User-Agent'),
+    userId: req.user?.id || 'Anónimo',
+    organization: req.user?.organization || 'N/A',
+    body: req.body ? JSON.stringify(req.body).substring(0, 500) : 'N/A',
+    params: req.params,
+    query: req.query,
+    timestamp: new Date().toISOString()
+  });
+
+  // Errores de validación de express-validator (ya manejados en validations.js)
+  if (err.type === 'validation') {
+    return res.status(400).json({
+      success: false,
+      message: 'Errores de validación',
+      errors: err.errors
+    });
+  }
+
+  // Errores de validación de Mongoose
+  if (err.name === 'ValidationError') {
+    const errors = Object.values(err.errors).map(val => ({
+      field: val.path,
+      message: val.message,
+      value: val.value
     }));
 
     return res.status(400).json({
-      status: 'error',
-      message: 'Errores de validación',
-      errors: errorMessages
+      success: false,
+      message: 'Errores de validación de base de datos',
+      errors
     });
   }
-  
-  next();
+
+  // Errores de duplicado de MongoDB (índices únicos)
+  if (err.code === 11000) {
+    const field = Object.keys(err.keyValue)[0];
+    const value = err.keyValue[field];
+    
+    return res.status(409).json({
+      success: false,
+      message: `El ${field} '${value}' ya existe en el sistema`,
+      field,
+      value,
+      code: 'DUPLICATE_ENTRY'
+    });
+  }
+
+  // Errores de casting de MongoDB (IDs inválidos)
+  if (err.name === 'CastError') {
+    return res.status(400).json({
+      success: false,
+      message: 'ID inválido proporcionado',
+      field: err.path,
+      value: err.value,
+      code: 'INVALID_ID'
+    });
+  }
+
+  // Errores JWT
+  if (err.name === 'JsonWebTokenError') {
+    return res.status(401).json({
+      success: false,
+      message: 'Token de acceso inválido',
+      code: 'INVALID_TOKEN'
+    });
+  }
+
+  if (err.name === 'TokenExpiredError') {
+    return res.status(401).json({
+      success: false,
+      message: 'Token de acceso expirado',
+      code: 'EXPIRED_TOKEN'
+    });
+  }
+
+  // Errores de autorización personalizados
+  if (err.name === 'UnauthorizedError' || err.status === 403) {
+    return res.status(403).json({
+      success: false,
+      message: 'No tienes autorización para realizar esta acción',
+      code: 'UNAUTHORIZED'
+    });
+  }
+
+  // Errores de conexión a base de datos
+  if (err.name === 'MongoNetworkError' || err.name === 'MongooseServerSelectionError') {
+    return res.status(503).json({
+      success: false,
+      message: 'Error de conexión con la base de datos. Intenta nuevamente.',
+      code: 'DATABASE_CONNECTION_ERROR'
+    });
+  }
+
+  // Errores de timeout de MongoDB
+  if (err.name === 'MongoTimeoutError') {
+    return res.status(408).json({
+      success: false,
+      message: 'Tiempo de espera agotado en la base de datos',
+      code: 'DATABASE_TIMEOUT'
+    });
+  }
+
+  // Errores de sintaxis JSON
+  if (err.type === 'entity.parse.failed') {
+    return res.status(400).json({
+      success: false,
+      message: 'JSON inválido en el cuerpo de la petición',
+      code: 'INVALID_JSON'
+    });
+  }
+
+  // Errores de tamaño de payload
+  if (err.type === 'entity.too.large') {
+    return res.status(413).json({
+      success: false,
+      message: 'El tamaño del archivo o datos enviados es demasiado grande',
+      code: 'PAYLOAD_TOO_LARGE'
+    });
+  }
+
+  // Errores de Rate Limiting
+  if (err.status === 429) {
+    return res.status(429).json({
+      success: false,
+      message: 'Demasiadas solicitudes. Intenta nuevamente más tarde.',
+      code: 'RATE_LIMIT_EXCEEDED'
+    });
+  }
+
+  // Errores específicos de SIGRISK-EC
+  if (err.code === 'ASSET_NOT_FOUND') {
+    return res.status(404).json({
+      success: false,
+      message: 'Activo no encontrado en el sistema',
+      code: 'ASSET_NOT_FOUND'
+    });
+  }
+
+  if (err.code === 'RISK_CALCULATION_ERROR') {
+    return res.status(400).json({
+      success: false,
+      message: 'Error en el cálculo de riesgo. Verifica los datos proporcionados.',
+      code: 'RISK_CALCULATION_ERROR'
+    });
+  }
+
+  if (err.code === 'ORGANIZATION_ACCESS_DENIED') {
+    return res.status(403).json({
+      success: false,
+      message: 'No tienes acceso a los datos de esta organización',
+      code: 'ORGANIZATION_ACCESS_DENIED'
+    });
+  }
+
+  // Error de archivo no encontrado
+  if (err.code === 'ENOENT') {
+    return res.status(404).json({
+      success: false,
+      message: 'Archivo o recurso no encontrado',
+      code: 'FILE_NOT_FOUND'
+    });
+  }
+
+  // Errores de multer (subida de archivos)
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(413).json({
+      success: false,
+      message: 'El archivo es demasiado grande',
+      code: 'FILE_TOO_LARGE'
+    });
+  }
+
+  if (err.code === 'LIMIT_UNEXPECTED_FILE') {
+    return res.status(400).json({
+      success: false,
+      message: 'Tipo de archivo no permitido',
+      code: 'INVALID_FILE_TYPE'
+    });
+  }
+
+  // Error genérico para desarrollo (incluye stack trace)
+  if (process.env.NODE_ENV === 'development') {
+    return res.status(err.statusCode || err.status || 500).json({
+      success: false,
+      message: err.message || 'Error interno del servidor',
+      stack: err.stack,
+      error: err,
+      timestamp: new Date().toISOString(),
+      environment: 'development'
+    });
+  }
+
+  // Error genérico para producción (sin información sensible)
+  res.status(err.statusCode || err.status || 500).json({
+    success: false,
+    message: err.statusCode || err.status ? err.message : 'Error interno del servidor',
+    code: 'INTERNAL_SERVER_ERROR',
+    timestamp: new Date().toISOString()
+  });
 };
 
-// Validaciones para registro de usuario
-const validateUserRegistration = [
-  body('email')
-    .isEmail()
-    .withMessage('Debe proporcionar un email válido')
-    .normalizeEmail()
-    .toLowerCase(),
-  
-  body('password')
-    .isLength({ min: 8 })
-    .withMessage('La contraseña debe tener al menos 8 caracteres')
-    .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/)
-    .withMessage('La contraseña debe contener al menos una mayúscula, una minúscula, un número y un carácter especial'),
-  
-  body('profile.firstName')
-    .trim()
-    .isLength({ min: 2, max: 50 })
-    .withMessage('El nombre debe tener entre 2 y 50 caracteres')
-    .matches(/^[a-zA-ZáéíóúÁÉÍÓÚñÑ\s]+$/)
-    .withMessage('El nombre solo puede contener letras y espacios'),
-  
-  body('profile.lastName')
-    .trim()
-    .isLength({ min: 2, max: 50 })
-    .withMessage('El apellido debe tener entre 2 y 50 caracteres')
-    .matches(/^[a-zA-ZáéíóúÁÉÍÓÚñÑ\s]+$/)
-    .withMessage('El apellido solo puede contener letras y espacios'),
-  
-  body('profile.phone')
-    .optional()
-    .matches(/^[0-9+\-\s()]+$/)
-    .withMessage('Formato de teléfono inválido'),
-  
-  body('role')
-    .optional()
-    .isIn(['admin', 'analyst', 'viewer'])
-    .withMessage('Rol no válido'),
-  
-  handleValidationErrors
-];
-
-// Validaciones para login
-const validateUserLogin = [
-  body('email')
-    .isEmail()
-    .withMessage('Debe proporcionar un email válido')
-    .normalizeEmail()
-    .toLowerCase(),
-  
-  body('password')
-    .notEmpty()
-    .withMessage('La contraseña es requerida'),
-  
-  handleValidationErrors
-];
-
-// Validaciones para actualización de perfil
-const validateProfileUpdate = [
-  body('profile.firstName')
-    .optional()
-    .trim()
-    .isLength({ min: 2, max: 50 })
-    .withMessage('El nombre debe tener entre 2 y 50 caracteres'),
-  
-  body('profile.lastName')
-    .optional()
-    .trim()
-    .isLength({ min: 2, max: 50 })
-    .withMessage('El apellido debe tener entre 2 y 50 caracteres'),
-  
-  body('profile.phone')
-    .optional()
-    .matches(/^[0-9+\-\s()]+$/)
-    .withMessage('Formato de teléfono inválido'),
-  
-  body('preferences.language')
-    .optional()
-    .isIn(['es', 'en'])
-    .withMessage('Idioma no válido'),
-  
-  body('preferences.theme')
-    .optional()
-    .isIn(['light', 'dark', 'auto'])
-    .withMessage('Tema no válido'),
-  
-  handleValidationErrors
-];
-
-// Validaciones para cambio de contraseña
-const validatePasswordChange = [
-  body('currentPassword')
-    .notEmpty()
-    .withMessage('La contraseña actual es requerida'),
-  
-  body('newPassword')
-    .isLength({ min: 8 })
-    .withMessage('La nueva contraseña debe tener al menos 8 caracteres')
-    .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/)
-    .withMessage('La nueva contraseña debe contener al menos una mayúscula, una minúscula, un número y un carácter especial'),
-  
-  body('confirmPassword')
-    .custom((value, { req }) => {
-      if (value !== req.body.newPassword) {
-        throw new Error('Las contraseñas no coinciden');
-      }
-      return true;
-    }),
-  
-  handleValidationErrors
-];
-
-// Validaciones para registro de organización
-const validateOrganizationRegistration = [
-  body('name')
-    .trim()
-    .isLength({ min: 2, max: 200 })
-    .withMessage('El nombre de la organización debe tener entre 2 y 200 caracteres'),
-  
-  body('ruc')
-    .matches(/^\d{13}$/)
-    .withMessage('El RUC debe tener exactamente 13 dígitos'),
-  
-  body('type')
-    .isIn(['comercial', 'financiera', 'salud', 'educativa', 'gubernamental', 'manufactura', 'servicios', 'tecnologia', 'ong', 'otro'])
-    .withMessage('Tipo de organización no válido'),
-  
-  body('sector')
-    .isIn(['publico', 'privado', 'mixto'])
-    .withMessage('Sector no válido'),
-  
-  body('size')
-    .isIn(['micro', 'pequena', 'mediana', 'grande'])
-    .withMessage('Tamaño de empresa no válido'),
-  
-  body('contact.email')
-    .optional()
-    .isEmail()
-    .withMessage('Email de contacto inválido')
-    .normalizeEmail(),
-  
-  body('contact.phone')
-    .optional()
-    .matches(/^[0-9+\-\s()]+$/)
-    .withMessage('Formato de teléfono inválido'),
-  
-  handleValidationErrors
-];
-
-// Validaciones para parámetros de ID
-const validateObjectId = (paramName = 'id') => [
-  param(paramName)
-    .isMongoId()
-    .withMessage(`${paramName} debe ser un ID válido`),
-  
-  handleValidationErrors
-];
-
-// Validaciones para paginación
-const validatePagination = [
-  query('page')
-    .optional()
-    .isInt({ min: 1 })
-    .withMessage('La página debe ser un número entero mayor a 0'),
-  
-  query('limit')
-    .optional()
-    .isInt({ min: 1, max: 100 })
-    .withMessage('El límite debe ser un número entre 1 y 100'),
-  
-  query('sort')
-    .optional()
-    .isIn(['asc', 'desc', '1', '-1'])
-    .withMessage('Orden no válido'),
-  
-  handleValidationErrors
-];
-
-module.exports = {
-  handleValidationErrors,
-  validateUserRegistration,
-  validateUserLogin,
-  validateProfileUpdate,
-  validatePasswordChange,
-  validateOrganizationRegistration,
-  validateObjectId,
-  validatePagination
+// Middleware para manejar rutas no encontradas (404)
+const notFoundHandler = (req, res) => {
+  res.status(404).json({
+    success: false,
+    message: `Ruta ${req.originalUrl} no encontrada`,
+    code: 'ROUTE_NOT_FOUND',
+    method: req.method,
+    timestamp: new Date().toISOString()
+  });
 };
+
+module.exports = errorHandler;

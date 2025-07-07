@@ -91,7 +91,7 @@ async function seedDatabase() {
     // Super Admin
     const superAdmin = new User({
       email: 'carlos.montufar@udla.edu.ec',
-      password: await bcrypt.hash('Admin123!', 12),
+      password: 'Admin123!',
       name: 'Dr. Carlos Montúfar',
       role: 'super_admin',
       organization: udlaOrg._id,

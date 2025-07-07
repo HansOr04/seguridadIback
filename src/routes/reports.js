@@ -117,9 +117,6 @@ router.get('/statistics', reportController.getReportStatistics);
 // GET /api/reports/:id - Obtener reporte por ID
 router.get('/:id', reportController.getReportById);
 
-// PUT /api/reports/:id - Actualizar reporte
-router.put('/:id', reportValidation, reportController.updateReport);
-
 // DELETE /api/reports/:id - Eliminar reporte
 router.delete('/:id', reportController.deleteReport);
 

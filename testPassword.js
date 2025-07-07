@@ -10,7 +10,7 @@ async function testPassword() {
     console.log('✅ Conectado a MongoDB');
 
     // Buscar el usuario admin
-    const user = await User.findOne({ email: 'admin@udla.edu.ec' }).select('+password');
+    const user = await User.findOne({ email: 'carlos.montufar@udla.edu.ec' }).select('+password');
     
     if (!user) {
       console.log('❌ Usuario no encontrado');
