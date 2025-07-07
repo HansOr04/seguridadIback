@@ -67,6 +67,15 @@ const PERMISSIONS = {
     UPDATE: ['super_admin', 'admin', 'analyst'],
     DELETE: ['super_admin', 'admin'],
     CALCULATE: ['super_admin', 'admin', 'analyst']
+  },
+  
+  // Permisos de CVE
+  CVE: {
+    READ: ['super_admin', 'admin', 'analyst', 'viewer'],
+    SYNC: ['super_admin', 'admin'],
+    CORRELATE: ['super_admin', 'admin', 'analyst'],
+    UPDATE_REMEDIATION: ['super_admin', 'admin', 'analyst'],
+    EXPORT: ['super_admin', 'admin', 'analyst']
   }
 };
 
@@ -100,7 +109,7 @@ const authorize = (allowedRoles = []) => {
       }
 
       // Verificar que el usuario esté activo
-      if (!req.user.isActive) {
+      if (req.user.isActive === false) {
         console.warn(`Usuario inactivo intentó acceder: ${req.user.email}`);
         return res.status(403).json({
           status: 'error',
@@ -366,6 +375,14 @@ const riskPermissions = {
   canCalculate: authorize(['super_admin', 'admin', 'analyst'])
 };
 
+const cvePermissions = {
+  canRead: authorize(['super_admin', 'admin', 'analyst', 'viewer']),
+  canSync: authorize(['super_admin', 'admin']),
+  canCorrelate: authorize(['super_admin', 'admin', 'analyst']),
+  canUpdateRemediation: authorize(['super_admin', 'admin', 'analyst']),
+  canExport: authorize(['super_admin', 'admin', 'analyst'])
+};
+
 // Middleware de conveniencia para casos comunes
 const requireAdmin = authorize(['super_admin', 'admin']);
 const requireAnalyst = authorize(['super_admin', 'admin', 'analyst']);
@@ -386,6 +403,7 @@ module.exports = {
   userPermissions,
   reportPermissions,
   riskPermissions,
+  cvePermissions,
   
   // Middleware de conveniencia
   requireAdmin,
