@@ -1,250 +1,192 @@
-// src/app.js - Versión corregida
 const express = require('express');
+const mongoose = require('mongoose');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const compression = require('compression');
-const cookieParser = require('cookie-parser');
 const rateLimit = require('express-rate-limit');
+const cookieParser = require('cookie-parser');
+const path = require('path');
 
+// Importar configuraciones
+require('dotenv').config();
+const { connectDB } = require('./config/database');
+const corsConfig = require('./config/cors');
+
+// Importar middleware
+const errorHandler = require('./middleware/errorHandler');
+const logger = require('./middleware/logger');
+
+// Importar rutas
+const authRoutes = require('./routes/auth');
+const userRoutes = require('./routes/users');
+const organizationRoutes = require('./routes/organizations');
+const assetRoutes = require('./routes/assets');
+const threatRoutes = require('./routes/threats');
+const vulnerabilityRoutes = require('./routes/vulnerabilities');
+const riskRoutes = require('./routes/risks');
+const treatmentRoutes = require('./routes/treatments');
+const controlRoutes = require('./routes/controls');
+const monitoringRoutes = require('./routes/monitoring');
+const reportRoutes = require('./routes/reports');
+
+// Importar servicios
+const cronJobs = require('./services/cronJobs');
+
+// Crear aplicación Express
 const app = express();
 
-// ===== MIDDLEWARES DE SEGURIDAD =====
-app.use(helmet({
-  crossOriginEmbedderPolicy: false,
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
-      scriptSrc: ["'self'"],
-      imgSrc: ["'self'", "data:", "https:"],
-    },
-  },
-}));
+// Conectar a MongoDB
+connectDB();
 
-// Rate Limiting
+// Configurar rate limiting
 const limiter = rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW) * 60 * 1000 || 15 * 60 * 1000, // 15 minutos
   max: parseInt(process.env.RATE_LIMIT_MAX) || 100, // máximo 100 requests por ventana
   message: {
-    error: 'Demasiadas solicitudes desde esta IP, intente de nuevo más tarde.',
-    code: 'RATE_LIMIT_EXCEEDED'
+    success: false,
+    message: 'Demasiadas solicitudes, intenta nuevamente más tarde'
   },
   standardHeaders: true,
   legacyHeaders: false
 });
 
-app.use('/api/', limiter);
+// Middleware de seguridad
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" }
+}));
 
-// CORS
-const corsOptions = {
-  origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
-  credentials: true,
-  optionsSuccessStatus: 200,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
-};
+// Configurar CORS
+app.use(cors(corsConfig));
 
-app.use(cors(corsOptions));
+// Rate limiting
+app.use(limiter);
 
-// ===== MIDDLEWARES GENERALES =====
+// Compresión
 app.use(compression());
-app.use(morgan('combined'));
+
+// Logging
+if (process.env.NODE_ENV === 'development') {
+  app.use(morgan('dev'));
+} else {
+  app.use(morgan('combined'));
+}
+
+// Body parsing
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
 
-// Parsear JSON y URL encoded
-app.use(express.json({ 
-  limit: process.env.MAX_FILE_SIZE || '10mb',
-  strict: true
-}));
+// Servir archivos estáticos
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
-app.use(express.urlencoded({ 
-  extended: true, 
-  limit: process.env.MAX_FILE_SIZE || '10mb'
-}));
+// Middleware personalizado de logging
+app.use(logger);
 
-// ===== MIDDLEWARE DE LOGGING =====
-app.use((req, res, next) => {
-  console.log(`📡 ${req.method} ${req.path} - ${new Date().toISOString()}`);
-  next();
-});
-
-// ===== HEALTH CHECK =====
+// Rutas de salud
 app.get('/health', (req, res) => {
-  res.status(200).json({
-    status: 'ok',
+  res.json({
+    success: true,
+    message: 'SIGRISK-EC MAGERIT Backend funcionando correctamente',
     timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV || 'development',
-    version: '1.0.0'
+    version: '1.0.0',
+    environment: process.env.NODE_ENV,
+    database: mongoose.connection.readyState === 1 ? 'conectada' : 'desconectada',
+    cronJobs: cronJobs.getStatus()
   });
 });
 
-// ===== RUTAS DE API =====
-const loadRoutes = () => {
-  try {
-    // Importar rutas con manejo de errores
-    console.log('📂 Cargando rutas de API...');
+// Ruta principal
+app.get('/', (req, res) => {
+  res.json({
+    success: true,
+    message: 'SIGRISK-EC MAGERIT - Sistema de Gestión Cuantitativa de Riesgos Cibernéticos',
+    version: '1.0.0',
+    description: 'Backend desarrollado para USFQ - Ingeniería en Ciberseguridad',
+    methodology: 'MAGERIT v3.0 + Normativas Ecuatorianas',
+    features: [
+      'Autenticación JWT completa',
+      'Gestión de activos MAGERIT',
+      'Cálculo cuantitativo de riesgos',
+      'Tratamientos y controles ISO 27002',
+      'Monitoreo continuo automatizado',
+      'Generación de reportes PDF/Excel',
+      'Integración CVE/NVD (preparada)',
+      'KPIs y métricas en tiempo real'
+    ],
+    endpoints: {
+      auth: '/api/auth',
+      users: '/api/users',
+      organizations: '/api/organizations',
+      assets: '/api/assets',
+      threats: '/api/threats',
+      vulnerabilities: '/api/vulnerabilities',
+      risks: '/api/risks',
+      treatments: '/api/treatments',
+      controls: '/api/controls',
+      monitoring: '/api/monitoring',
+      reports: '/api/reports'
+    },
+    documentation: '/api/docs',
+    health: '/health'
+  });
+});
 
-    // Rutas básicas (siempre disponibles)
-    try {
-      const authRoutes = require('./routes/auth');
-      app.use('/api/auth', authRoutes);
-      console.log('✅ Rutas de autenticación cargadas');
-    } catch (error) {
-      console.error('❌ Error cargando rutas de auth:', error.message);
-    }
+// Configurar rutas de API
+app.use('/api/auth', authRoutes);
+app.use('/api/users', userRoutes);
+app.use('/api/organizations', organizationRoutes);
+app.use('/api/assets', assetRoutes);
+app.use('/api/threats', threatRoutes);
+app.use('/api/vulnerabilities', vulnerabilityRoutes);
+app.use('/api/risks', riskRoutes);
+app.use('/api/treatments', treatmentRoutes);
+app.use('/api/controls', controlRoutes);
+app.use('/api/monitoring', monitoringRoutes);
+app.use('/api/reports', reportRoutes);
 
-    try {
-      const userRoutes = require('./routes/users');
-      app.use('/api/users', userRoutes);
-      console.log('✅ Rutas de usuarios cargadas');
-    } catch (error) {
-      console.error('❌ Error cargando rutas de users:', error.message);
-    }
-
-    try {
-      const assetRoutes = require('./routes/assets');
-      app.use('/api/assets', assetRoutes);
-      console.log('✅ Rutas de activos cargadas');
-    } catch (error) {
-      console.error('❌ Error cargando rutas de assets:', error.message);
-    }
-
-    // Rutas de CVE (con validación de dependencias)
-    try {
-      const cveRoutes = require('./routes/cve');
-      app.use('/api/cve', cveRoutes);
-      console.log('✅ Rutas de CVE cargadas');
-    } catch (error) {
-      console.error('❌ Error cargando rutas de CVE:', error.message);
-    }
-
-    // Rutas de riesgos (con validación de dependencias)
-    try {
-      const riskRoutes = require('./routes/risks');
-      app.use('/api/risks', riskRoutes);
-      console.log('✅ Rutas de riesgos cargadas');
-    } catch (error) {
-      console.error('❌ Error cargando rutas de risks:', error.message);
-    }
-
-    // Rutas opcionales (cargar solo si existen)
-    const optionalRoutes = [
-      { path: './routes/organizations', mount: '/api/organizations', name: 'organizaciones' },
-      { path: './routes/threats', mount: '/api/threats', name: 'amenazas' },
-      { path: './routes/vulnerabilities', mount: '/api/vulnerabilities', name: 'vulnerabilidades' },
-      { path: './routes/treatments', mount: '/api/treatments', name: 'tratamientos' },
-      { path: './routes/controls', mount: '/api/controls', name: 'controles' },
-      { path: './routes/monitoring', mount: '/api/monitoring', name: 'monitoreo' },
-      { path: './routes/reports', mount: '/api/reports', name: 'reportes' },
-      { path: './routes/kpis', mount: '/api/kpis', name: 'KPIs' }
-    ];
-
-    optionalRoutes.forEach(route => {
-      try {
-        const routeModule = require(route.path);
-        app.use(route.mount, routeModule);
-        console.log(`✅ Rutas de ${route.name} cargadas`);
-      } catch (error) {
-        console.log(`⚠️  Rutas de ${route.name} no disponibles (${error.message})`);
-      }
-    });
-
-    console.log('🎯 Carga de rutas completada');
-
-  } catch (error) {
-    console.error('❌ Error general cargando rutas:', error);
-  }
-};
-
-// Cargar rutas
-loadRoutes();
-
-// ===== RUTA 404 =====
+// Ruta para manejar 404
 app.use('*', (req, res) => {
   res.status(404).json({
-    status: 'error',
-    message: `Ruta ${req.originalUrl} no encontrada`,
-    timestamp: new Date().toISOString()
+    success: false,
+    message: 'Endpoint no encontrado',
+    requestedUrl: req.originalUrl,
+    availableEndpoints: {
+      auth: '/api/auth',
+      users: '/api/users',
+      organizations: '/api/organizations',
+      assets: '/api/assets',
+      threats: '/api/threats',
+      vulnerabilities: '/api/vulnerabilities',
+      risks: '/api/risks',
+      treatments: '/api/treatments',
+      controls: '/api/controls',
+      monitoring: '/api/monitoring',
+      reports: '/api/reports'
+    }
   });
 });
 
-// ===== MIDDLEWARE DE MANEJO DE ERRORES =====
-app.use((error, req, res, next) => {
-  console.error('❌ Error no capturado:', error);
+// Middleware de manejo de errores (debe ir al final)
+app.use(errorHandler);
 
-  // Error de sintaxis JSON
-  if (error instanceof SyntaxError && error.status === 400 && 'body' in error) {
-    return res.status(400).json({
-      status: 'error',
-      message: 'JSON inválido en el cuerpo de la petición',
-      timestamp: new Date().toISOString()
-    });
-  }
+// Inicializar cron jobs en producción
+if (process.env.NODE_ENV === 'production') {
+  cronJobs.initialize();
+}
 
-  // Error de validación de Mongoose
-  if (error.name === 'ValidationError') {
-    const errors = Object.values(error.errors).map(err => ({
-      field: err.path,
-      message: err.message
-    }));
-    
-    return res.status(400).json({
-      status: 'error',
-      message: 'Error de validación',
-      errors,
-      timestamp: new Date().toISOString()
-    });
-  }
+// Manejo de cierre graceful
+process.on('SIGTERM', () => {
+  console.log('🛑 SIGTERM recibido, cerrando servidor...');
+  cronJobs.stopAll();
+  mongoose.connection.close();
+});
 
-  // Error de cast de Mongoose (ID inválido)
-  if (error.name === 'CastError') {
-    return res.status(400).json({
-      status: 'error',
-      message: `ID inválido: ${error.value}`,
-      timestamp: new Date().toISOString()
-    });
-  }
-
-  // Error de duplicado de MongoDB
-  if (error.code === 11000) {
-    const field = Object.keys(error.keyValue)[0];
-    const value = error.keyValue[field];
-    
-    return res.status(409).json({
-      status: 'error',
-      message: `El ${field} '${value}' ya existe`,
-      timestamp: new Date().toISOString()
-    });
-  }
-
-  // Error JWT
-  if (error.name === 'JsonWebTokenError') {
-    return res.status(401).json({
-      status: 'error',
-      message: 'Token inválido',
-      timestamp: new Date().toISOString()
-    });
-  }
-
-  if (error.name === 'TokenExpiredError') {
-    return res.status(401).json({
-      status: 'error',
-      message: 'Token expirado',
-      timestamp: new Date().toISOString()
-    });
-  }
-
-  // Error genérico
-  const status = error.status || error.statusCode || 500;
-  const message = error.message || 'Error interno del servidor';
-
-  res.status(status).json({
-    status: 'error',
-    message,
-    ...(process.env.NODE_ENV === 'development' && { stack: error.stack }),
-    timestamp: new Date().toISOString()
-  });
+process.on('SIGINT', () => {
+  console.log('🛑 SIGINT recibido, cerrando servidor...');
+  cronJobs.stopAll();
+  mongoose.connection.close();
+  process.exit(0);
 });
 
 module.exports = app;
