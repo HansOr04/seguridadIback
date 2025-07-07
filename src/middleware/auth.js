@@ -6,6 +6,9 @@ const User = require('../models/User');
  * Verifica el JWT token y carga la información del usuario
  */
 const authenticateToken = async (req, res, next) => {
+  if (req.method === 'OPTIONS') {
+    return next(); // ✅ Permitir preflight sin autenticación
+  }
   try {
     // Obtener token del header Authorization
     const authHeader = req.headers['authorization'];

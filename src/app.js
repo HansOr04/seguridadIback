@@ -1,6 +1,5 @@
 const express = require('express');
 const mongoose = require('mongoose');
-const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const compression = require('compression');
@@ -8,13 +7,20 @@ const rateLimit = require('express-rate-limit');
 const cookieParser = require('cookie-parser');
 const path = require('path');
 const cron = require('node-cron');
-
 require('dotenv').config();
-const { connectDatabase } = require('./config/database'); // 🔁 corregido nombre
-const corsConfig = require('./config/cors');
 
+// Configs y middlewares personalizados
+const { connectDatabase } = require('./config/database');
+const corsMiddleware = require('./config/cors');
 const errorHandler = require('./middleware/errorHandler');
-const { logger, logInfo, logError, logWarning, cleanOldLogs, getLogStats } = require('./middleware/logger');
+const {
+  logger,
+  logInfo,
+  logError,
+  logWarning,
+  cleanOldLogs,
+  getLogStats
+} = require('./middleware/logger');
 
 // Rutas
 const authRoutes = require('./routes/auth');
@@ -26,20 +32,22 @@ const controlRoutes = require('./routes/controls');
 const monitoringRoutes = require('./routes/monitoring');
 const reportRoutes = require('./routes/reports');
 
+// Servicios
 const cronJobs = require('./services/cronJobs');
 
 const app = express();
 
-// Conexión a MongoDB
-connectDatabase(); // 🔁 corregido nombre
+// 🛠️ Conexión a MongoDB
+connectDatabase();
 
+// 📝 Inicio de aplicación
 logInfo('Iniciando SIGRISK-EC MAGERIT Backend', {
   version: '1.0.0',
   environment: process.env.NODE_ENV,
   port: process.env.PORT || 3000
 });
 
-// Middleware personalizado para manejar cuando se excede el rate limit
+// ⚙️ Rate Limiting
 const handleRateLimitExceeded = (req, res) => {
   logWarning('Rate limit excedido', {
     ip: req.ip,
@@ -47,14 +55,12 @@ const handleRateLimitExceeded = (req, res) => {
     url: req.originalUrl,
     timestamp: new Date().toISOString()
   });
-
   res.status(429).json({
     success: false,
     message: 'Demasiadas solicitudes, intenta nuevamente más tarde'
   });
 };
 
-// Configurar rate limiter
 const limiter = rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW) * 60 * 1000 || 15 * 60 * 1000,
   max: parseInt(process.env.RATE_LIMIT_MAX) || 100,
@@ -64,15 +70,19 @@ const limiter = rateLimit({
   handler: handleRateLimitExceeded
 });
 
-// Middleware generales
-app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
-app.options('*', cors(corsConfig));
+// 🛡️ Middlewares globales
+app.use(corsMiddleware);
+app.options('*', corsMiddleware);
+
+app.use((req, res, next) => {
+  if (req.method === 'OPTIONS') return res.sendStatus(200);
+  next();
+});
+
+app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(limiter);
 app.use(compression());
-
-if (process.env.NODE_ENV === 'development') {
-  app.use(morgan('dev'));
-}
+if (process.env.NODE_ENV === 'development') app.use(morgan('dev'));
 
 app.use(express.json({
   limit: '10mb',
@@ -87,14 +97,13 @@ app.use(express.json({
     }
   }
 }));
+
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
-
-// Logging
 app.use(logger);
 
-// Capturar errores de JSON inválido
+// 🔥 Capturar JSON inválido
 app.use((err, req, res, next) => {
   if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
     logError('Error de parsing JSON', err, {
@@ -102,49 +111,12 @@ app.use((err, req, res, next) => {
       ip: req.ip,
       userAgent: req.get('User-Agent')
     });
-    return res.status(400).json({
-      success: false,
-      message: 'JSON inválido en el body de la petición'
-    });
+    return res.status(400).json({ success: false, message: 'JSON inválido en el body de la petición' });
   }
   next();
 });
 
-// Rutas
-app.get('/health', async (req, res) => {
-  try {
-    const dbStatus = mongoose.connection.readyState === 1 ? 'conectada' : 'desconectada';
-    const cronStatus = cronJobs.getStatus();
-    const logStats = await getLogStats();
-
-    const healthData = {
-      success: true,
-      message: 'SIGRISK-EC MAGERIT Backend funcionando correctamente',
-      timestamp: new Date().toISOString(),
-      version: '1.0.0',
-      environment: process.env.NODE_ENV,
-      database: dbStatus,
-      cronJobs: cronStatus,
-      logs: logStats,
-      uptime: process.uptime(),
-      memory: process.memoryUsage()
-    };
-
-    if (dbStatus !== 'conectada') {
-      logWarning('Health check: Base de datos desconectada', { dbStatus });
-    }
-
-    res.json(healthData);
-  } catch (error) {
-    logError('Error en health check', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error en health check',
-      error: error.message
-    });
-  }
-});
-
+// 📡 Endpoints
 app.get('/', (req, res) => {
   res.json({
     success: true,
@@ -161,44 +133,45 @@ app.get('/', (req, res) => {
       'Generación de reportes PDF/Excel',
       'Integración CVE/NVD (preparada)',
       'KPIs y métricas en tiempo real',
-      'Logging completo y auditoria'
-    ],
-    endpoints: {
-      auth: '/api/auth',
-      users: '/api/users',
-      organizations: '/api/organizations',
-      assets: '/api/assets',
-      threats: '/api/threats',
-      vulnerabilities: '/api/vulnerabilities',
-      risks: '/api/risks',
-      treatments: '/api/treatments',
-      controls: '/api/controls',
-      monitoring: '/api/monitoring',
-      reports: '/api/reports'
-    },
-    documentation: '/api/docs',
-    health: '/health',
-    logs: '/api/logs'
+      'Logging completo y auditoría'
+    ]
   });
+});
+
+app.get('/health', async (req, res) => {
+  try {
+    const dbStatus = mongoose.connection.readyState === 1 ? 'conectada' : 'desconectada';
+    const cronStatus = cronJobs.getStatus();
+    const logStats = await getLogStats();
+    res.json({
+      success: true,
+      message: 'SIGRISK-EC MAGERIT Backend funcionando correctamente',
+      timestamp: new Date().toISOString(),
+      version: '1.0.0',
+      environment: process.env.NODE_ENV,
+      database: dbStatus,
+      cronJobs: cronStatus,
+      logs: logStats,
+      uptime: process.uptime(),
+      memory: process.memoryUsage()
+    });
+  } catch (error) {
+    logError('Error en health check', error);
+    res.status(500).json({ success: false, message: 'Error en health check', error: error.message });
+  }
 });
 
 app.get('/api/logs/stats', async (req, res) => {
   try {
     const stats = await getLogStats();
-    res.json({
-      success: true,
-      data: stats
-    });
+    res.json({ success: true, data: stats });
   } catch (error) {
     logError('Error obteniendo estadísticas de logs', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error obteniendo estadísticas de logs'
-    });
+    res.status(500).json({ success: false, message: 'Error obteniendo estadísticas de logs' });
   }
 });
 
-// Rutas de API
+// 📁 Rutas principales
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/assets', assetRoutes);
@@ -208,7 +181,7 @@ app.use('/api/controls', controlRoutes);
 app.use('/api/monitoring', monitoringRoutes);
 app.use('/api/reports', reportRoutes);
 
-// 404
+// 🔎 Ruta no encontrada
 app.use((req, res) => {
   logWarning('Endpoint no encontrado', {
     url: req.originalUrl,
@@ -216,7 +189,6 @@ app.use((req, res) => {
     ip: req.ip,
     userAgent: req.get('User-Agent')
   });
-
   res.status(404).json({
     success: false,
     message: 'Endpoint no encontrado',
@@ -224,10 +196,10 @@ app.use((req, res) => {
   });
 });
 
-// Manejo de errores (middleware final)
+// 🧯 Manejo de errores final
 app.use(errorHandler);
 
-// Cron jobs
+// 🕒 Cron Jobs en producción
 if (process.env.NODE_ENV === 'production') {
   cronJobs.initialize();
   logInfo('Cron jobs inicializados en producción');
@@ -247,9 +219,9 @@ cron.schedule('0 * * * *', async () => {
   }
 });
 
-// Graceful shutdown
+// 🔌 Graceful Shutdown
 process.on('SIGTERM', () => {
-  logInfo('SIGTERM recibido, cerrando servidor gracefully...');
+  logInfo('SIGTERM recibido, cerrando servidor...');
   cronJobs.stopAll();
   mongoose.connection.close(() => {
     logInfo('Conexión MongoDB cerrada');
@@ -258,7 +230,7 @@ process.on('SIGTERM', () => {
 });
 
 process.on('SIGINT', () => {
-  logInfo('SIGINT recibido, cerrando servidor gracefully...');
+  logInfo('SIGINT recibido, cerrando servidor...');
   cronJobs.stopAll();
   mongoose.connection.close(() => {
     logInfo('Conexión MongoDB cerrada');
@@ -267,37 +239,14 @@ process.on('SIGINT', () => {
 });
 
 process.on('uncaughtException', (error) => {
-  logError('Excepción no capturada', error, {
-    fatal: true,
-    timestamp: new Date().toISOString()
-  });
+  logError('Excepción no capturada', error, { fatal: true });
   console.error('💥 Excepción no capturada:', error);
   process.exit(1);
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-  logError('Promise rejection no manejada', new Error(reason), {
-    promise: promise.toString(),
-    fatal: false,
-    timestamp: new Date().toISOString()
-  });
+  logError('Promise rejection no manejada', new Error(reason), { fatal: false });
   console.error('💥 Promise rejection no manejada:', reason);
 });
 
-// Exportar app y función de inicio
-const startServer = (port = process.env.PORT || 3000) => {
-  return app.listen(port, () => {
-    logInfo('Servidor SIGRISK-EC iniciado exitosamente', {
-      port,
-      environment: process.env.NODE_ENV,
-      timestamp: new Date().toISOString(),
-      processId: process.pid,
-      nodeVersion: process.version
-    });
-    console.log(`🚀 SIGRISK-EC MAGERIT Backend corriendo en puerto ${port}`);
-    console.log(`📊 Environment: ${process.env.NODE_ENV}`);
-    console.log(`📝 Logs guardados en: ./logs/`);
-  });
-};
-
-module.exports = { app, startServer };
+module.exports = { app };
