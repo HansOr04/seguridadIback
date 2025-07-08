@@ -6,15 +6,12 @@ const compression = require('compression');
 const rateLimit = require('express-rate-limit');
 const cookieParser = require('cookie-parser');
 const path = require('path');
-const cron = require('node-cron');
 require('dotenv').config();
 
 // Configs y middlewares personalizados
 const { connectDatabase } = require('./config/database');
 const corsMiddleware = require('./config/cors');
 const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
-
-// CORREGIDO: Importar del nuevo logger
 const { httpLogger, log, logger } = require('./middleware/logger');
 
 // Rutas
@@ -26,9 +23,6 @@ const treatmentRoutes = require('./routes/treatments');
 const controlRoutes = require('./routes/controls');
 const monitoringRoutes = require('./routes/monitoring');
 const reportRoutes = require('./routes/reports');
-
-// Servicios - PERO NO INICIALIZAR AQUÍ
-const cronJobs = require('./services/cronJobs');
 
 const app = express();
 
@@ -98,7 +92,7 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
-// CORREGIDO: Usar el nuevo middleware de logging HTTP
+// Logging HTTP
 app.use(httpLogger);
 
 // 🔥 Capturar JSON inválido
@@ -147,16 +141,7 @@ app.get('/', (req, res) => {
 app.get('/health', async (req, res) => {
   try {
     const dbStatus = mongoose.connection.readyState === 1 ? 'conectada' : 'desconectada';
-    
-    // Función simple para obtener estado de cron jobs (con fallback)
-    let cronStatus = 'unknown';
-    try {
-      cronStatus = cronJobs.getStatus ? cronJobs.getStatus() : 'not_available';
-    } catch (error) {
-      cronStatus = 'error';
-    }
 
-    // Función simple para estadísticas de logs (con fallback)
     const logStats = {
       available: true,
       directory: path.join(process.cwd(), 'logs'),
@@ -171,7 +156,6 @@ app.get('/health', async (req, res) => {
         version: '1.0.0',
         environment: process.env.NODE_ENV,
         database: dbStatus,
-        cronJobs: cronStatus,
         logs: logStats,
         uptime: process.uptime(),
         memory: process.memoryUsage()
@@ -190,7 +174,6 @@ app.get('/health', async (req, res) => {
 
 app.get('/api/logs/stats', async (req, res) => {
   try {
-    // Estadísticas básicas de logs
     const stats = {
       available: true,
       directory: path.join(process.cwd(), 'logs'),
@@ -223,25 +206,19 @@ app.use('/api/controls', controlRoutes);
 app.use('/api/monitoring', monitoringRoutes);
 app.use('/api/reports', reportRoutes);
 
-// 🔎 Ruta no encontrada (usar el middleware del errorHandler)
+// 🔎 Ruta no encontrada
 app.use(notFoundHandler);
 
 // 🧯 Manejo de errores final
 app.use(errorHandler);
 
-// 🕒 Cron Jobs - SOLO INICIALIZAR EN SERVIDOR PRINCIPAL
-// NO inicializamos aquí para evitar duplicación
-// Los cron jobs se inicializarán en server.js SOLO cuando sea necesario
-
-// Función simple para limpiar logs (NO cron job, solo función utilitaria)
+// Función utilitaria para limpiar logs antiguos
 const cleanOldLogs = (days = 30) => {
   try {
     const fs = require('fs');
     const logDir = path.join(process.cwd(), 'logs');
     
-    if (!fs.existsSync(logDir)) {
-      return;
-    }
+    if (!fs.existsSync(logDir)) return;
 
     const files = fs.readdirSync(logDir);
     const cutoffDate = new Date();
@@ -251,7 +228,6 @@ const cleanOldLogs = (days = 30) => {
       try {
         const filePath = path.join(logDir, file);
         const stats = fs.statSync(filePath);
-        
         if (stats.mtime < cutoffDate) {
           fs.unlinkSync(filePath);
           log.info(`Log file eliminado: ${file}`);
@@ -265,15 +241,9 @@ const cleanOldLogs = (days = 30) => {
   }
 };
 
-// REMOVER PROGRAMACIÓN DE CRON JOBS DE AQUÍ
-// Los cron jobs se inicializarán desde server.js una sola vez
-
 // 🔌 Graceful Shutdown
 process.on('SIGTERM', () => {
   log.info('SIGTERM recibido en app.js, preparando cierre...');
-  
-  // NO cerrar cron jobs desde aquí, se hace en server.js
-  // Solo cerrar conexión de base de datos si es necesario
   if (mongoose.connection.readyState === 1) {
     mongoose.connection.close(() => {
       log.info('Conexión MongoDB cerrada desde app.js');
@@ -283,8 +253,6 @@ process.on('SIGTERM', () => {
 
 process.on('SIGINT', () => {
   log.info('SIGINT recibido en app.js, preparando cierre...');
-  
-  // NO cerrar cron jobs desde aquí, se hace en server.js
   if (mongoose.connection.readyState === 1) {
     mongoose.connection.close(() => {
       log.info('Conexión MongoDB cerrada desde app.js');
@@ -292,73 +260,8 @@ process.on('SIGINT', () => {
   }
 });
 
-// Función utilitaria para inicializar cron jobs (se llama desde server.js)
-const initializeCronJobs = () => {
-  try {
-    log.info('Inicializando cron jobs desde función utilitaria...');
-    
-    if (cronJobs && typeof cronJobs.initialize === 'function') {
-      cronJobs.initialize();
-      log.info('Cron jobs inicializados exitosamente');
-      
-      // Programar limpieza de logs solo UNA VEZ
-      cron.schedule('0 2 * * *', () => {
-        log.info('Iniciando limpieza de logs antiguos');
-        cleanOldLogs(30);
-      }, { 
-        timezone: 'America/Guayaquil',
-        scheduled: true 
-      });
-
-      // Programar estadísticas de logs solo UNA VEZ
-      cron.schedule('0 * * * *', async () => {
-        try {
-          log.info('Generando estadísticas de logs', {
-            uptime: process.uptime(),
-            memory: process.memoryUsage(),
-            timestamp: new Date().toISOString()
-          });
-        } catch (error) {
-          log.error('Error generando estadísticas de logs', { error: error.message });
-        }
-      }, { 
-        timezone: 'America/Guayaquil',
-        scheduled: true 
-      });
-      
-      return true;
-    } else {
-      log.warn('Cron jobs no disponibles o no tienen método initialize');
-      return false;
-    }
-  } catch (error) {
-    log.error('Error inicializando cron jobs', { error: error.message });
-    return false;
-  }
-};
-
-// Función utilitaria para detener cron jobs
-const stopCronJobs = () => {
-  try {
-    if (cronJobs && typeof cronJobs.stopAll === 'function') {
-      cronJobs.stopAll();
-      log.info('Cron jobs detenidos desde función utilitaria');
-      return true;
-    }
-    return false;
-  } catch (error) {
-    log.warn('Error deteniendo cron jobs', { error: error.message });
-    return false;
-  }
-};
-
-// Los manejadores de excepciones ya están en el logger
-// No es necesario duplicarlos aquí
-
-// Exportar app y funciones utilitarias
+// Exportar app y utilitarios
 module.exports = { 
   app, 
-  initializeCronJobs, 
-  stopCronJobs,
   cleanOldLogs 
 };

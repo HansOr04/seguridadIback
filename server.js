@@ -1,80 +1,9 @@
-// server.js - OPTIMIZADO PARA EVITAR SOBRECARGA
-const { app, initializeCronJobs, stopCronJobs } = require('./src/app');
+// server.js - OPTIMIZADO SIN CRON JOBS
+const { app } = require('./src/app');
 const { log } = require('./src/middleware/logger');
 
 const PORT = process.env.PORT || 3000;
-
-// Variable para controlar si los cron jobs ya fueron inicializados
-let cronJobsInitialized = false;
 let server = null;
-
-// Función para inicializar cron jobs de manera segura
-const safeInitializeCronJobs = () => {
-  if (cronJobsInitialized) {
-    log.warn('Cron jobs ya están inicializados, omitiendo...');
-    return;
-  }
-
-  // Solo inicializar en producción O si está explícitamente habilitado
-  const shouldInitializeCrons = process.env.NODE_ENV === 'production' || 
-                               process.env.ENABLE_CRON_DEV === 'true' ||
-                               process.env.FORCE_CRON_INIT === 'true';
-
-  if (!shouldInitializeCrons) {
-    log.info('Cron jobs deshabilitados en desarrollo. Variables para habilitar:', {
-      'ENABLE_CRON_DEV': 'true',
-      'FORCE_CRON_INIT': 'true',
-      'NODE_ENV': 'production'
-    });
-    return;
-  }
-
-  try {
-    log.info('Inicializando cron jobs desde servidor principal...', {
-      environment: process.env.NODE_ENV,
-      pid: process.pid,
-      timestamp: new Date().toISOString()
-    });
-
-    const success = initializeCronJobs();
-    
-    if (success) {
-      cronJobsInitialized = true;
-      log.info('✅ Cron jobs inicializados exitosamente desde servidor principal');
-    } else {
-      log.error('❌ Falló la inicialización de cron jobs');
-    }
-  } catch (error) {
-    log.error('Error crítico inicializando cron jobs:', {
-      error: error.message,
-      stack: error.stack
-    });
-  }
-};
-
-// Función para detener cron jobs de manera segura
-const safeStopCronJobs = () => {
-  if (!cronJobsInitialized) {
-    log.info('Cron jobs no estaban inicializados, omitiendo detención...');
-    return;
-  }
-
-  try {
-    log.info('Deteniendo cron jobs desde servidor principal...');
-    const success = stopCronJobs();
-    
-    if (success) {
-      cronJobsInitialized = false;
-      log.info('✅ Cron jobs detenidos exitosamente');
-    } else {
-      log.warn('⚠️  No se pudieron detener todos los cron jobs');
-    }
-  } catch (error) {
-    log.error('Error deteniendo cron jobs:', {
-      error: error.message
-    });
-  }
-};
 
 // Iniciar el servidor
 const startServer = () => {
@@ -92,12 +21,6 @@ const startServer = () => {
       console.log(`📊 Environment: ${process.env.NODE_ENV}`);
       console.log(`📝 Logs guardados en: ./logs/`);
       console.log(`🔧 PID: ${process.pid}`);
-
-      // Inicializar cron jobs SOLO después de que el servidor esté corriendo
-      // y SOLO una vez
-      setTimeout(() => {
-        safeInitializeCronJobs();
-      }, 2000); // Esperar 2 segundos para que el servidor esté completamente inicializado
     });
 
     // Configurar timeout para requests
@@ -152,7 +75,7 @@ const setupServerErrorHandling = (server) => {
       error: err.message,
       remoteAddress: socket.remoteAddress
     });
-    
+
     if (socket.writable) {
       socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
     }
@@ -174,10 +97,7 @@ const setupGracefulShutdown = (server) => {
       uptime: process.uptime()
     });
 
-    // 1. Detener cron jobs primero
-    safeStopCronJobs();
-
-    // 2. Cerrar servidor HTTP
+    // 1. Cerrar servidor HTTP
     server.close((err) => {
       if (err) {
         log.error('Error cerrando servidor HTTP:', { error: err.message });
@@ -185,17 +105,15 @@ const setupGracefulShutdown = (server) => {
         log.info('Servidor HTTP cerrado exitosamente');
       }
 
-      // 3. Cerrar conexión de base de datos
+      // 2. Cerrar conexión de base de datos
       const mongoose = require('mongoose');
       if (mongoose.connection.readyState === 1) {
         mongoose.connection.close(() => {
           log.info('Conexión MongoDB cerrada exitosamente');
-          
           log.info('Cierre graceful completado, saliendo del proceso...', {
             finalUptime: process.uptime(),
             finalMemory: process.memoryUsage()
           });
-          
           process.exit(0);
         });
       } else {
@@ -211,7 +129,6 @@ const setupGracefulShutdown = (server) => {
     }, 10000);
   };
 
-  // Configurar manejadores de señales
   process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
   process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
@@ -221,11 +138,7 @@ const setupGracefulShutdown = (server) => {
       error: err.message,
       stack: err.stack
     });
-    
     console.error('❌ Excepción no capturada:', err);
-    
-    // Intentar cierre graceful
-    safeStopCronJobs();
     process.exit(1);
   });
 
@@ -234,10 +147,7 @@ const setupGracefulShutdown = (server) => {
       reason: reason?.message || reason,
       promise: promise.toString()
     });
-    
     console.error('❌ Promise rejection no manejada:', reason);
-    
-    // No salir del proceso en este caso, solo logear
   });
 };
 
@@ -253,26 +163,23 @@ const setupHealthMonitoring = () => {
       external: Math.round(memUsage.external / 1024 / 1024)
     };
 
-    // Solo logear si el uso de memoria es alto
-    if (memMB.heapUsed > 500) { // Más de 500MB
+    if (memMB.heapUsed > 500) {
       log.warn('Alto uso de memoria detectado', {
         memory: memMB,
-        uptime: Math.round(process.uptime()),
-        cronJobsActive: cronJobsInitialized
+        uptime: Math.round(process.uptime())
       });
     }
-  }, 5 * 60 * 1000); // Cada 5 minutos
+  }, 5 * 60 * 1000);
 
   // Log de estado cada hora
   setInterval(() => {
     log.info('Estado del servidor', {
       uptime: Math.round(process.uptime()),
       memory: process.memoryUsage(),
-      cronJobsInitialized,
       environment: process.env.NODE_ENV,
       pid: process.pid
     });
-  }, 60 * 60 * 1000); // Cada hora
+  }, 60 * 60 * 1000);
 };
 
 // Función principal
@@ -286,26 +193,18 @@ const main = () => {
       cwd: process.cwd()
     });
 
-    // 1. Iniciar servidor
     const server = startServer();
-
-    // 2. Configurar manejo de errores
     setupServerErrorHandling(server);
-
-    // 3. Configurar cierre graceful
     setupGracefulShutdown(server);
-
-    // 4. Configurar monitoreo de salud
     setupHealthMonitoring();
 
     log.info('✅ Configuración del servidor completada exitosamente');
-
   } catch (error) {
     log.error('❌ Error crítico en función main:', {
       error: error.message,
       stack: error.stack
     });
-    
+
     console.error('❌ Error crítico iniciando aplicación:', error);
     process.exit(1);
   }
@@ -315,6 +214,5 @@ const main = () => {
 if (require.main === module) {
   main();
 } else {
-  // Si se importa como módulo, solo exportar el servidor
   module.exports = startServer();
 }
